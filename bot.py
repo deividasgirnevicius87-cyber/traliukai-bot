@@ -25,6 +25,7 @@ STRIPE_API_KEY = "mk_1TguBTBmGXQcERFrKQhTXKxo"
 STRIPE_PRICE_ID = "price_1UYSXYBmGXQcERFrR0Um9w39"
 STRIPE_PAYMENT_LINK = "https://buy.stripe.com/8x29AS1M970Lbfm1vqasg00"
 WEBHOOK_PORT = 8080
+TARGET_GROUP_ID = -1001823350926  # Jūsų privačios grupės ID
 
 stripe.api_key = STRIPE_API_KEY
 client = genai.Client(api_key=GEMINI_API_KEY)
@@ -78,7 +79,45 @@ def add_subscription(user_id: int, chat_id: int, days: int = 30):
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_name = user.first_name or "Narys"
+    username = user.username
     
+    # Patikriname, ar vartotojas jau apmokėjo (yra subscribers lentelėje)
+    if username:
+        clean_username = username.strip().lstrip("@").lower()
+        conn = sqlite3.connect("subscriptions.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT expiry_date FROM subscribers WHERE LOWER(telegram_username) = ?", (clean_username,))
+        row = cursor.fetchone()
+        conn.close()
+        
+        if row:
+            expiry_str = row[0]
+            expiry_date = datetime.strptime(expiry_str, "%Y-%m-%d %H:%M:%S")
+            if expiry_date > datetime.now():
+                try:
+                    # Sukuriame vienkartinę pakvietimo nuorodą į grupę
+                    invite_link = await context.bot.create_chat_invite_link(
+                        chat_id=TARGET_GROUP_ID,
+                        member_limit=1,
+                        expire_date=datetime.now() + timedelta(hours=24)
+                    )
+                    
+                    # Įrašome į aktyvių prenumeratų lentelę (priminimams ir šalinimui)
+                    add_subscription(user.id, TARGET_GROUP_ID, days=30)
+                    
+                    await update.message.reply_text(
+                        f"🎉 **Apmokėjimas sėkmingai rastas!**\n\n"
+                        f"Štai jūsų asmeninė vienkartinė pakvietimo nuoroda į „Traliukai Europa“ grupę:\n{invite_link.invite_link}\n\n"
+                        "📌 *Pastaba: Nuoroda galioja 24 valandas ir skirta tik jums.*",
+                        parse_mode="Markdown"
+                    )
+                    return
+                except Exception as e:
+                    logging.error(f"Klaida kuriant pakvietimo nuorodą start komandoje: {e}")
+                    await update.message.reply_text("⚠️ Įvyko techninė klaida generuojant nuorodą. Susisiekite su administratoriumi.")
+                    return
+
+    # Jei neapmokėta arba nerasta – rodo įprastą kvietimą pirkti
     keyboard = [[InlineKeyboardButton("💳 Mokėti prenumeratą (30 d.)", url=STRIPE_PAYMENT_LINK)]]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
@@ -92,7 +131,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📌 **Kaip prisijungti:**\n"
         "1. Spauskite žemiau esantį mokėjimo mygtuką.\n"
         "2. Apmokėjimo lange **būtinai įrašykite savo Telegram slapyvardį** (pvz., `@jusu_vardas`).\n"
-        "3. Apmokėję iškart gausite nuorodą į privačią grupę!\n",
+        "3. Apmokėję sugrįžkite čia ir dar kartą paspauskite **/start**, kad gautumėte pakvietimo nuorodą!\n",
         reply_markup=reply_markup,
         parse_mode="Markdown"
     )
@@ -102,7 +141,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def analyze_with_gemini(prompt: str) -> str:
     try:
         response = client.models.generate_content(
-            model="gemini-3.8-flash",
+            model="gemini-2.5-flash",  # Atnaujinta į stabilų modelio pavadinimą
             contents=prompt,
         )
         return response.text.strip()
@@ -132,7 +171,7 @@ async def stripe_webhook(request):
                     telegram_username = field.get('text', {}).get('value')
 
         if telegram_username:
-            telegram_username = telegram_username.strip().lstrip("@")
+            telegram_username = telegram_username.strip().lstrip("@").lower()
             expiry_date = datetime.now() + timedelta(days=30)
             
             conn = sqlite3.connect("subscriptions.db")
@@ -144,7 +183,7 @@ async def stripe_webhook(request):
             conn.commit()
             conn.close()
             
-            logging.info(f"✅ Sėkmingai aktyvuota narystė vartotojui: @{telegram_username} ({customer_email})")
+            logging.info(f"✅ Sėkmingai aktyvuota narystė duomenų bazėje: @{telegram_username} ({customer_email})")
 
     return web.Response(text="Success", status=200)
 
