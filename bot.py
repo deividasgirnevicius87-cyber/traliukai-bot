@@ -81,43 +81,49 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_name = user.first_name or "Narys"
     username = user.username
     
-    # Patikriname, ar vartotojas jau apmokėjo (yra subscribers lentelėje)
+    # Patikriname, ar tai jūsų testinis slapyvardis arba patvirtintas narys bazėje
+    is_subscriber = False
     if username:
         clean_username = username.strip().lstrip("@").lower()
-        conn = sqlite3.connect("subscriptions.db")
-        cursor = conn.cursor()
-        cursor.execute("SELECT expiry_date FROM subscribers WHERE LOWER(telegram_username) = ?", (clean_username,))
-        row = cursor.fetchone()
-        conn.close()
-        
-        if row:
-            expiry_str = row[0]
-            expiry_date = datetime.strptime(expiry_str, "%Y-%m-%d %H:%M:%S")
-            if expiry_date > datetime.now():
-                try:
-                    # Sukuriame vienkartinę pakvietimo nuorodą į grupę
-                    invite_link = await context.bot.create_chat_invite_link(
-                        chat_id=TARGET_GROUP_ID,
-                        member_limit=1,
-                        expire_date=datetime.now() + timedelta(hours=24)
-                    )
-                    
-                    # Įrašome į aktyvių prenumeratų lentelę (priminimams ir šalinimui)
-                    add_subscription(user.id, TARGET_GROUP_ID, days=30)
-                    
-                    await update.message.reply_text(
-                        f"🎉 **Apmokėjimas sėkmingai rastas!**\n\n"
-                        f"Štai jūsų asmeninė vienkartinė pakvietimo nuoroda į „Traliukai Europa“ grupę:\n{invite_link.invite_link}\n\n"
-                        "📌 *Pastaba: Nuoroda galioja 24 valandas ir skirta tik jums.*",
-                        parse_mode="Markdown"
-                    )
-                    return
-                except Exception as e:
-                    logging.error(f"Klaida kuriant pakvietimo nuorodą start komandoje: {e}")
-                    await update.message.reply_text("⚠️ Įvyko techninė klaida generuojant nuorodą. Susisiekite su administratoriumi.")
-                    return
+        if clean_username == "ela1238":
+            is_subscriber = True
+        else:
+            conn = sqlite3.connect("subscriptions.db")
+            cursor = conn.cursor()
+            cursor.execute("SELECT expiry_date FROM subscribers WHERE LOWER(telegram_username) = ?", (clean_username,))
+            row = cursor.fetchone()
+            conn.close()
+            if row:
+                expiry_str = row[0]
+                expiry_date = datetime.strptime(expiry_str, "%Y-%m-%d %H:%M:%S")
+                if expiry_date > datetime.now():
+                    is_subscriber = True
 
-    # Jei neapmokėta arba nerasta – rodo įprastą kvietimą pirkti
+        if is_subscriber:
+            try:
+                # Sukuriame vienkartinę pakvietimo nuorodą į grupę
+                invite_link = await context.bot.create_chat_invite_link(
+                    chat_id=TARGET_GROUP_ID,
+                    member_limit=1,
+                    expire_date=datetime.now() + timedelta(hours=24)
+                )
+                
+                # Įrašome į aktyvių prenumeratų lentelę
+                add_subscription(user.id, TARGET_GROUP_ID, days=30)
+                
+                await update.message.reply_text(
+                    f"🎉 **Apmokėjimas sėkmingai rastas!**\n\n"
+                    f"Štai jūsų asmeninė vienkartinė pakvietimo nuoroda į „Traliukai Europa“ grupę:\n{invite_link.invite_link}\n\n"
+                    "📌 *Pastaba: Nuoroda galioja 24 valandas ir skirta tik jums.*",
+                    parse_mode="Markdown"
+                )
+                return
+            except Exception as e:
+                logging.error(f"Klaida kuriant pakvietimo nuorodą start komandoje: {e}")
+                await update.message.reply_text("⚠️ Įvyko techninė klaida generuojant nuorodą. Susisiekite su administratoriumi.")
+                return
+
+    # Jei neapmokėta – rodo įprastą kvietimą pirkti
     keyboard = [[InlineKeyboardButton("💳 Mokėti prenumeratą (30 d.)", url=STRIPE_PAYMENT_LINK)]]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
@@ -130,206 +136,4 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• **Daug naudingos informacijos:** Operatyvios rinkos naujienos, patarimai bei aktuali informacija transportuotojams.\n\n"
         "📌 **Kaip prisijungti:**\n"
         "1. Spauskite žemiau esantį mokėjimo mygtuką.\n"
-        "2. Apmokėjimo lange **būtinai įrašykite savo Telegram slapyvardį** (pvz., `@jusu_vardas`).\n"
-        "3. Apmokėję sugrįžkite čia ir dar kartą paspauskite **/start**, kad gautumėte pakvietimo nuorodą!\n",
-        reply_markup=reply_markup,
-        parse_mode="Markdown"
-    )
-
-# --- GEMINI PAGALBINĖ FUNKCIJA ---
-
-async def analyze_with_gemini(prompt: str) -> str:
-    try:
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",  # Atnaujinta į stabilų modelio pavadinimą
-            contents=prompt,
-        )
-        return response.text.strip()
-    except Exception as e:
-        logging.error(f"Gemini API Klaida: {e}")
-        return ""
-
-# --- STRIPE WEBHOOK SERVERIS ---
-
-async def stripe_webhook(request):
-    try:
-        payload = await request.text()
-        event = json.loads(payload)
-    except Exception as e:
-        return web.Response(text=str(e), status=400)
-
-    event_type = event.get("type")
-
-    if event_type == "checkout.session.completed":
-        session = event.get("data", {}).get("object", {})
-        customer_email = session.get('customer_details', {}).get('email')
-        
-        telegram_username = None
-        if session.get('custom_fields'):
-            for field in session['custom_fields']:
-                if field.get('type') == 'text':
-                    telegram_username = field.get('text', {}).get('value')
-
-        if telegram_username:
-            telegram_username = telegram_username.strip().lstrip("@").lower()
-            expiry_date = datetime.now() + timedelta(days=30)
-            
-            conn = sqlite3.connect("subscriptions.db")
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT OR REPLACE INTO subscribers (telegram_username, email, expiry_date)
-                VALUES (?, ?, ?)
-            """, (telegram_username, customer_email, expiry_date))
-            conn.commit()
-            conn.close()
-            
-            logging.info(f"✅ Sėkmingai aktyvuota narystė duomenų bazėje: @{telegram_username} ({customer_email})")
-
-    return web.Response(text="Success", status=200)
-
-async def start_web_server():
-    app = web.Application()
-    app.router.add_post('/webhook/stripe', stripe_webhook)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, '0.0.0.0', WEBHOOK_PORT)
-    await site.start()
-    logging.info(f"Stripe Webhook serveris paleistas ant prievado {WEBHOOK_PORT}")
-
-# --- FONINIS PRIMINIMŲ IR ŠALINIMO PROCESAS ---
-
-async def check_subscriptions(context: ContextTypes.DEFAULT_TYPE):
-    conn = sqlite3.connect("subscriptions.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT user_id, chat_id, expires_at, reminded FROM subscriptions")
-    rows = cursor.fetchall()
-    
-    now = datetime.now()
-
-    for user_id, chat_id, expires_at_str, reminded in rows:
-        expires_at = datetime.strptime(expires_at_str, "%Y-%m-%d %H:%M:%S")
-        time_left = expires_at - now
-
-        if timedelta(days=0) < time_left <= timedelta(days=3) and reminded == 0:
-            try:
-                await context.bot.send_message(
-                    chat_id=user_id,
-                    text="⚠️ Jūsų narystė baigsis už 3 dienų. Atnaujinkite prenumeratą."
-                )
-                cursor.execute("UPDATE subscriptions SET reminded = 1 WHERE user_id = ?", (user_id,))
-                conn.commit()
-            except Exception as e:
-                logging.error(f"Klaida siunčiant priminimą {user_id}: {e}")
-
-        elif time_left <= timedelta(days=0):
-            try:
-                await context.bot.ban_chat_member(chat_id=chat_id, user_id=user_id)
-                await context.bot.unban_chat_member(chat_id=chat_id, user_id=user_id)
-                await context.bot.send_message(
-                    chat_id=user_id,
-                    text="❌ Jūsų narystės laikas pasibaigė, buvote pašalinti iš grupės."
-                )
-            except Exception as e:
-                logging.error(f"Klaida šalinant vartotoją {user_id}: {e}")
-
-            cursor.execute("DELETE FROM subscriptions WHERE user_id = ?", (user_id,))
-            conn.commit()
-
-    conn.close()
-
-# --- GRUPĖS MODERAVIMAS IR SKELBIMŲ FORMATAVIMAS ---
-
-async def group_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message or not update.message.text:
-        return
-
-    text = update.message.text
-    chat_id = update.message.chat_id
-    message_id = update.message.message_id
-    user = update.message.from_user
-    user_id = user.id
-    user_name = user.first_name or "Narys"
-    user_link = f"[{user_name}](tg://user?id={user_id})"
-
-    if URL_PATTERN.search(text):
-        try:
-            await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=f"⚠️ **{user_name}**, išorinės nuorodos ir reklama grupėje yra draudžiamos!"
-            )
-            return
-        except Exception as e:
-            logging.error(f"Nepavyko ištrinti žinutės: {e}")
-
-    prompt = f"""
-    Išanalizuok šią grupės nario žinutę logistikos ir tralų grupėje: "{text}"
-    Nustatyk jos tipą ir grąžink atsakymą TIK tokiu formatu:
-    
-    Jei žinutėje yra įžeidimų ar necenzūrinių žodžių, parašyk:
-    STATUSAS: PAŽEIDIMAS
-    
-    Jei tai logistikos SKELBIMAS, parašyk:
-    STATUSAS: SKELBIMAS
-    FORMATAS:
-    1️⃣ Iš kur -> į kur: [maršrutas lietuviškai]
-    2️⃣ Krovinys: [koks krovinys]
-    3️⃣ Būklė: [ar važiuojanti mašina, ar ne]
-    4️⃣ Apmokėjimas: [ar apmokėta / kiek mokama]
-    5️⃣ Kontaktai: [telefono numeris ar kontaktai]
-    
-    Jei tai paprastas pokalbis, parašyk:
-    STATUSAS: PALIKTI
-    """
-
-    response_text = await analyze_with_gemini(prompt)
-
-    if "STATUSAS: PAŽEIDIMAS" in response_text:
-        try:
-            await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=f"🚫 **{user_name}**, žinutė pašalinta dėl nepagarbios kalbos."
-            )
-        except Exception as e:
-            logging.error(f"Klaida trinant pažeidimą: {e}")
-            
-    elif "STATUSAS: SKELBIMAS" in response_text:
-        try:
-            formatted_part = response_text.split("FORMATAS:")[1].strip()
-            await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=f"📋 **Skelbimas** (įkėlė: {user_link}):\n\n{formatted_part}",
-                parse_mode="Markdown"
-            )
-        except Exception as e:
-            logging.error(f"Klaida automatiškai formatuojant skelbimą: {e}")
-
-# --- MAIN FUNKCIJA ---
-
-async def main():
-    global bot_app
-    init_db()
-    
-    bot_app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
-    await bot_app.initialize()
-    await bot_app.start()
-
-    bot_app.add_handler(CommandHandler("start", start_command))
-    bot_app.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.TEXT & (~filters.COMMAND), group_message_handler))
-
-    if bot_app.job_queue:
-        bot_app.job_queue.run_repeating(check_subscriptions, interval=43200, first=10)
-
-    await start_web_server()
-
-    print("🤖 Automatinis Stripe botas su Webhook paleistas ir veikia!")
-    
-    await bot_app.updater.start_polling()
-
-    while True:
-        await asyncio.sleep(3600)
-
-if __name__ == "__main__":
-    asyncio.run(main())
+        "2. Apm
