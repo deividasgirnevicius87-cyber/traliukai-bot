@@ -155,6 +155,9 @@ async def analyze_with_gemini(prompt: str) -> str:
 
 # --- STRIPE WEBHOOK SERVERIS ---
 
+async def handle_root(request):
+    return web.Response(text="Traliukai Bot is running!", status=200)
+
 async def stripe_webhook(request):
     try:
         payload = await request.text()
@@ -197,6 +200,7 @@ async def stripe_webhook(request):
 
 async def start_web_server():
     app = web.Application()
+    app.router.add_get('/', handle_root)
     app.router.add_post('/webhook/stripe', stripe_webhook)
     runner = web.AppRunner(app)
     await runner.setup()
