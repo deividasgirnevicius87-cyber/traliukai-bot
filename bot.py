@@ -15,6 +15,7 @@ from telegram.ext import (
     ChatJoinRequestHandler,
     MessageHandler,
     CommandHandler,
+    ChatMemberHandler,
     filters
 )
 
@@ -26,6 +27,9 @@ STRIPE_PRICE_ID = "price_1UYSXYBmGXQcERFrR0Um9w39"
 STRIPE_PAYMENT_LINK = "https://buy.stripe.com/8x29AS1M970Lbfm1vqasg00"
 WEBHOOK_PORT = 8080
 TARGET_GROUP_ID = -1001823350926  # Jūsų privačios grupės ID
+
+# Įrašykite savo Telegram User ID (skaičių), kad gavę pranešimą matytumėte, kas prisijungė
+ADMIN_USER_ID = 123456789  # <--- Pakeiskite į savo tikrą Telegram User ID!
 
 stripe.api_key = STRIPE_API_KEY
 client = genai.Client(api_key=GEMINI_API_KEY)
@@ -140,6 +144,38 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "💬 Jei kiltų klausimų ar problemų, drąsiai kreipkitės į administratorių: @deivis87\n",
         reply_markup=reply_markup
     )
+
+# --- NAUJŲ NARIŲ STEBĖJIMAS IR PRANEŠIMAS ADMINISTRATORIUI ---
+
+async def track_new_members(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    result = update.chat_member
+    if not result:
+        return
+
+    if result.chat.id == TARGET_GROUP_ID:
+        old_status = result.old_chat_member.status
+        new_status = result.new_chat_member.status
+
+        if old_status in ["left", "kicked", "restricted"] and new_status in ["member", "administrator"]:
+            user = result.new_chat_member.user
+            user_name = user.first_name or "Narys"
+            username = f"@{user.username}" if user.username else "Nėra slapyvardžio"
+            user_id = user.id
+
+            try:
+                await context.bot.send_message(
+                    chat_id=ADMIN_USER_ID,
+                    text=(
+                        f"🚨 **Naujas narys grupėje!**\n\n"
+                        f"👤 Vardas: {user_name}\n"
+                        f"🔗 Slapyvardis: {username}\n"
+                        f"🆔 ID: `{user_id}`\n\n"
+                        f"Sėkmingai prisijungė prie grupės!"
+                    ),
+                    parse_mode="Markdown"
+                )
+            except Exception as e:
+                logging.error(f"Nepavyko išsiųsti pranešimo administratoriui: {e}")
 
 # --- GEMINI PAGALBINĖ FUNKCIJA ---
 
@@ -328,6 +364,7 @@ async def main():
     
     bot_app.add_handler(CommandHandler("start", start_command))
     bot_app.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.TEXT & (~filters.COMMAND), group_message_handler))
+    bot_app.add_handler(ChatMemberHandler(track_new_members, ChatMemberHandler.CHAT_MEMBER))
 
     if bot_app.job_queue:
         bot_app.job_queue.run_repeating(check_subscriptions, interval=43200, first=10)
