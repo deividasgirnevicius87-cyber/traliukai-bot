@@ -1,5 +1,4 @@
 import os
-import sqlite3
 import logging
 import re
 import json
@@ -8,6 +7,7 @@ from datetime import datetime, timedelta
 import stripe
 from google import genai
 from aiohttp import web
+import psycopg2
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
@@ -35,42 +35,47 @@ URL_PATTERN = re.compile(r'(https?://\S+|www\.\S+|t\.me/\S+)', re.IGNORECASE)
 
 bot_app = None
 
-# --- DUOMENŲ BAZĖS VALDYMAS ---
+# --- DUOMENŲ BAZĖS VALDYMAS (PostgreSQL) ---
+
+def get_db_connection():
+    return psycopg2.connect(os.getenv("DATABASE_URL"))
 
 def init_db():
-    conn = sqlite3.connect("subscriptions.db")
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS subscriptions (
-            user_id INTEGER PRIMARY KEY,
-            chat_id INTEGER,
-            expires_at TEXT,
+            user_id BIGINT PRIMARY KEY,
+            chat_id BIGINT,
+            expires_at TIMESTAMP,
             reminded INTEGER DEFAULT 0
         )
     """)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS subscribers (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             telegram_username TEXT UNIQUE,
             email TEXT,
             expiry_date TIMESTAMP
         )
     """)
     conn.commit()
+    cursor.close()
     conn.close()
 
 def add_subscription(user_id: int, chat_id: int, days: int = 30):
-    conn = sqlite3.connect("subscriptions.db")
+    conn = get_db_connection()
     cursor = conn.cursor()
-    expires_at = (datetime.now() + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+    expires_at = datetime.now() + timedelta(days=days)
     cursor.execute("""
         INSERT INTO subscriptions (user_id, chat_id, expires_at, reminded)
-        VALUES (?, ?, ?, 0)
-        ON CONFLICT(user_id) DO UPDATE SET
-            expires_at = excluded.expires_at,
+        VALUES (%s, %s, %s, 0)
+        ON CONFLICT (user_id) DO UPDATE SET
+            expires_at = EXCLUDED.expires_at,
             reminded = 0
     """, (user_id, chat_id, expires_at))
     conn.commit()
+    cursor.close()
     conn.close()
 
 # --- START KOMANDOS APDOROJIMAS ---
@@ -86,14 +91,14 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if clean_username == "ela1238":
             is_subscriber = True
         else:
-            conn = sqlite3.connect("subscriptions.db")
+            conn = get_db_connection()
             cursor = conn.cursor()
-            cursor.execute("SELECT expiry_date FROM subscribers WHERE LOWER(telegram_username) = ?", (clean_username,))
+            cursor.execute("SELECT expiry_date FROM subscribers WHERE LOWER(telegram_username) = LOWER(%s)", (clean_username,))
             row = cursor.fetchone()
+            cursor.close()
             conn.close()
             if row:
-                expiry_str = row[0]
-                expiry_date = datetime.strptime(expiry_str, "%Y-%m-%d %H:%M:%S")
+                expiry_date = row[0]
                 if expiry_date > datetime.now():
                     is_subscriber = True
 
@@ -173,13 +178,17 @@ async def stripe_webhook(request):
             telegram_username = telegram_username.strip().lstrip("@").lower()
             expiry_date = datetime.now() + timedelta(days=30)
             
-            conn = sqlite3.connect("subscriptions.db")
+            conn = get_db_connection()
             cursor = conn.cursor()
             cursor.execute("""
-                INSERT OR REPLACE INTO subscribers (telegram_username, email, expiry_date)
-                VALUES (?, ?, ?)
+                INSERT INTO subscribers (telegram_username, email, expiry_date)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (telegram_username) DO UPDATE SET
+                    email = EXCLUDED.email,
+                    expiry_date = EXCLUDED.expiry_date
             """, (telegram_username, customer_email, expiry_date))
             conn.commit()
+            cursor.close()
             conn.close()
             
             logging.info(f"✅ Sėkmingai aktyvuota narystė duomenų bazėje: @{telegram_username} ({customer_email})")
@@ -198,14 +207,13 @@ async def start_web_server():
 # --- FONINIS PRIMINIMŲ PROCESAS ---
 
 async def check_subscriptions(context: ContextTypes.DEFAULT_TYPE):
-    conn = sqlite3.connect("subscriptions.db")
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT user_id, chat_id, expires_at, reminded FROM subscriptions")
     rows = cursor.fetchall()
     now = datetime.now()
 
-    for user_id, chat_id, expires_at_str, reminded in rows:
-        expires_at = datetime.strptime(expires_at_str, "%Y-%m-%d %H:%M:%S")
+    for user_id, chat_id, expires_at, reminded in rows:
         time_left = expires_at - now
 
         if timedelta(days=0) < time_left <= timedelta(days=3) and reminded == 0:
@@ -214,7 +222,7 @@ async def check_subscriptions(context: ContextTypes.DEFAULT_TYPE):
                     chat_id=user_id,
                     text="⚠️ Jūsų narystė baigsis už 3 dienų. Atnaujinkite prenumeratą."
                 )
-                cursor.execute("UPDATE subscriptions SET reminded = 1 WHERE user_id = ?", (user_id,))
+                cursor.execute("UPDATE subscriptions SET reminded = 1 WHERE user_id = %s", (user_id,))
                 conn.commit()
             except Exception as e:
                 logging.error(f"Klaida siunčiant priminimą {user_id}: {e}")
@@ -230,9 +238,10 @@ async def check_subscriptions(context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logging.error(f"Klaida šalinant vartotoją {user_id}: {e}")
 
-            cursor.execute("DELETE FROM subscriptions WHERE user_id = ?", (user_id,))
+            cursor.execute("DELETE FROM subscriptions WHERE user_id = %s", (user_id,))
             conn.commit()
 
+    cursor.close()
     conn.close()
 
 # --- GRUPĖS MODERAVIMAS ---
@@ -312,7 +321,6 @@ async def main():
     
     bot_app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
     
-    # ⚠️ SVARBIAUSIA: Handleriai PRIVALO būti pridedami PRIEŠ bot_app.initialize() ir start()!
     bot_app.add_handler(CommandHandler("start", start_command))
     bot_app.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.TEXT & (~filters.COMMAND), group_message_handler))
 
@@ -324,7 +332,7 @@ async def main():
 
     await start_web_server()
 
-    print("🤖 Automatinis Stripe botas su Webhook paleistas ir veikia!")
+    print("🤖 Automatinis Stripe botas su PostgreSQL paleistas ir veikia!")
     
     await bot_app.updater.start_polling()
 
