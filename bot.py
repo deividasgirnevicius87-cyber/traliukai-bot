@@ -33,7 +33,6 @@ client = genai.Client(api_key=GEMINI_API_KEY)
 logging.basicConfig(level=logging.INFO)
 URL_PATTERN = re.compile(r'(https?://\S+|www\.\S+|t\.me/\S+)', re.IGNORECASE)
 
-# Globalus kintamasis botui pasiekti web serveryje
 bot_app = None
 
 # --- DUOMENŲ BAZĖS VALDYMAS ---
@@ -74,7 +73,7 @@ def add_subscription(user_id: int, chat_id: int, days: int = 30):
     conn.commit()
     conn.close()
 
-# --- START KOMANDOS APDOROJIMAS (BOTO VARTAI) ---
+# --- START KOMANDOS APDOROJIMAS ---
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -122,7 +121,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton("💳 Mokėti prenumeratą (30 d.)", url=STRIPE_PAYMENT_LINK)]]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    # Pašalintas parse_mode="Markdown", kad nebūtų jokių klaidų
     await update.message.reply_text(
         f"Sveiki, {user_name}!\n\n"
         "🚚 „Traliukai Europa“ – didžiausia tralų ir logistikos bendruomenė Lietuvoje!\n\n"
@@ -197,14 +195,13 @@ async def start_web_server():
     await site.start()
     logging.info(f"Stripe Webhook serveris paleistas ant prievado {WEBHOOK_PORT}")
 
-# --- FONINIS PRIMINIMŲ IR ŠALINIMO PROCESAS ---
+# --- FONINIS PRIMINIMŲ PROCESAS ---
 
 async def check_subscriptions(context: ContextTypes.DEFAULT_TYPE):
     conn = sqlite3.connect("subscriptions.db")
     cursor = conn.cursor()
     cursor.execute("SELECT user_id, chat_id, expires_at, reminded FROM subscriptions")
     rows = cursor.fetchall()
-    
     now = datetime.now()
 
     for user_id, chat_id, expires_at_str, reminded in rows:
@@ -238,7 +235,7 @@ async def check_subscriptions(context: ContextTypes.DEFAULT_TYPE):
 
     conn.close()
 
-# --- GRUPĖS MODERAVIMAS IR SKELBIMŲ FORMATAVIMAS ---
+# --- GRUPĖS MODERAVIMAS ---
 
 async def group_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
@@ -314,14 +311,16 @@ async def main():
     init_db()
     
     bot_app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
-    await bot_app.initialize()
-    await bot_app.start()
-
+    
+    # ⚠️ SVARBIAUSIA: Handleriai PRIVALO būti pridedami PRIEŠ bot_app.initialize() ir start()!
     bot_app.add_handler(CommandHandler("start", start_command))
     bot_app.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.TEXT & (~filters.COMMAND), group_message_handler))
 
     if bot_app.job_queue:
         bot_app.job_queue.run_repeating(check_subscriptions, interval=43200, first=10)
+
+    await bot_app.initialize()
+    await bot_app.start()
 
     await start_web_server()
 
