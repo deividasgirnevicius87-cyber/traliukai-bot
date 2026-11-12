@@ -109,10 +109,9 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 add_subscription(user.id, TARGET_GROUP_ID, days=30)
                 
                 await update.message.reply_text(
-                    f"🎉 **Apmokėjimas sėkmingai rastas!**\n\n"
+                    f"🎉 Apmokėjimas sėkmingai rastas!\n\n"
                     f"Štai jūsų asmeninė vienkartinė pakvietimo nuoroda į „Traliukai Europa“ grupę:\n{invite_link.invite_link}\n\n"
-                    "📌 *Pastaba: Nuoroda galioja 24 valandas ir skirta tik jums.*",
-                    parse_mode="Markdown"
+                    "📌 Pastaba: Nuoroda galioja 24 valandas ir skirta tik jums."
                 )
                 return
             except Exception as e:
@@ -123,19 +122,19 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton("💳 Mokėti prenumeratą (30 d.)", url=STRIPE_PAYMENT_LINK)]]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
+    # Pašalintas parse_mode="Markdown", kad nebūtų jokių klaidų
     await update.message.reply_text(
-        f"Sveiki, **{user_name}**!\n\n"
-        "🚚 **„Traliukai Europa“ – didžiausia tralų ir logistikos bendruomenė Lietuvoje!**\n\n"
+        f"Sveiki, {user_name}!\n\n"
+        "🚚 „Traliukai Europa“ – didžiausia tralų ir logistikos bendruomenė Lietuvoje!\n\n"
         "Tai išskirtinė erdvė, kurioje susitinka savo srities profesionalai, patikimi vežėjai ir krovinių užsakovai. Prisijungę prie mūsų bendruomenės gaunate daugybę privalumų:\n\n"
-        "• **Kiekvieną dieną daug krovinių:** Kasdien skelbiami nauji maršrutai, pasiūlymai ir laisvi kroviniai tiek Lietuvoje, tiek visoje Europoje.\n"
-        "• **Patikimi vežėjai:** Dirbkite tik su saugomis, patikrintais ir atsakingais rinkos dalyviais.\n"
-        "• **Daug naudingos informacijos:** Operatyvios rinkos naujienos, patarimai bei aktuali informacija transportuotojams.\n\n"
-        "📌 **Kaip prisijungti:**\n"
+        "• Kiekvieną dieną daug krovinių: Kasdien skelbiami nauji maršrutai, pasiūlymai ir laisvi kroviniai tiek Lietuvoje, tiek visoje Europoje.\n"
+        "• Patikimi vežėjai: Dirbkite tik su saugomis, patikrintais ir atsakingais rinkos dalyviais.\n"
+        "• Daug naudingos informacijos: Operatyvios rinkos naujienos, patarimai bei aktuali informacija transportuotojams.\n\n"
+        "📌 Kaip prisijungti:\n"
         "1. Spauskite žemiau esantį mokėjimo mygtuką.\n"
         "2. Apmokėjimo lange būtinai įrašykite savo Telegram slapyvardį (pvz., @jusu_vardas).\n"
         "3. Apmokėję sugrįžkite čia ir dar kartą paspauskite /start, kad gautumėte pakvietimo nuorodą!\n",
-        reply_markup=reply_markup,
-        parse_mode="Markdown"
+        reply_markup=reply_markup
     )
 
 # --- GEMINI PAGALBINĖ FUNKCIJA ---
@@ -258,7 +257,7 @@ async def group_message_handler(update: Update, context: ContextTypes.DEFAULT_TY
             await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
             await context.bot.send_message(
                 chat_id=chat_id,
-                text=f"⚠️ **{user_name}**, išorinės nuorodos ir reklama grupėje yra draudžiamos!"
+                text=f"⚠️ {user_name}, išorinės nuorodos ir reklama grupėje yra draudžiamos!"
             )
             return
         except Exception as e:
@@ -291,7 +290,7 @@ async def group_message_handler(update: Update, context: ContextTypes.DEFAULT_TY
             await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
             await context.bot.send_message(
                 chat_id=chat_id,
-                text=f"🚫 **{user_name}**, žinutė pašalinta dėl nepagarbios kalbos."
+                text=f"🚫 {user_name}, žinutė pašalinta dėl nepagarbios kalbos."
             )
         except Exception as e:
             logging.error(f"Klaida trinant pažeidimą: {e}")
@@ -302,7 +301,7 @@ async def group_message_handler(update: Update, context: ContextTypes.DEFAULT_TY
             await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
             await context.bot.send_message(
                 chat_id=chat_id,
-                text=f"📋 **Skelbimas** (įkėlė: {user_link}):\n\n{formatted_part}",
+                text=f"📋 Skelbimas (įkėlė: {user_link}):\n\n{formatted_part}",
                 parse_mode="Markdown"
             )
         except Exception as e:
