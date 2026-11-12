@@ -120,7 +120,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
             except Exception as e:
                 logging.error(f"Klaida kuriant pakvietimo nuorodą start komandoje: {e}")
-                await update.message.reply_text("⚠️ Įvyko techninė klaida generuojant nuorodą. Susisiekite su administratoriumi.")
+                await update.message.reply_text("⚠️ Įvyko techninė klaida generuojant nuorodą. Susisiekite su administratoriumi @deivis87.")
                 return
 
     keyboard = [[InlineKeyboardButton("💳 Mokėti prenumeratą (30 d.)", url=STRIPE_PAYMENT_LINK)]]
@@ -136,7 +136,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📌 Kaip prisijungti:\n"
         "1. Spauskite žemiau esantį mokėjimo mygtuką.\n"
         "2. Apmokėjimo lange būtinai įrašykite savo Telegram slapyvardį (pvz., @jusu_vardas).\n"
-        "3. Apmokėję sugrįžkite čia ir dar kartą paspauskite /start, kad gautumėte pakvietimo nuorodą!\n",
+        "3. Apmokėję sugrįžkite čia ir dar kartą paspauskite /start, kad gautumėte pakvietimo nuorodą!\n\n"
+        "💬 Jei kiltų klausimų ar problemų, drąsiai kreipkitės į administratorių: @deivis87\n",
         reply_markup=reply_markup
     )
 
